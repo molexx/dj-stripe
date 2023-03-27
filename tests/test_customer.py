@@ -196,16 +196,21 @@ class TestCustomer(CreateAccountMixin, AssertStripeFksMixin, TestCase):
 
         customer = Customer.create(user)
 
+        # Get just created IdempotencyKey
+        idempotency_key = IdempotencyKey.objects.get(
+            action=f"customer:create:{fake_customer['id']}",
+            livemode=False,
+        )
+        idempotency_key = str(idempotency_key.uuid)
+
         customer_mock.assert_called_once_with(
             api_key=djstripe_settings.STRIPE_SECRET_KEY,
             email="",
-            idempotency_key=None,
-            metadata={},
+            idempotency_key=idempotency_key,
+            metadata={"idempotency_key": idempotency_key},
             stripe_account=None,
             stripe_version=djstripe_settings.STRIPE_API_VERSION,
         )
-
-        self.assertEqual(customer.metadata, None)
 
         self.assert_fks(
             customer,
@@ -300,9 +305,20 @@ class TestCustomer(CreateAccountMixin, AssertStripeFksMixin, TestCase):
             username="test_user_sync_non_local_card"
         )
         customer = Customer.create(user)
+
+        # Get just created IdempotencyKey
+        idempotency_key = IdempotencyKey.objects.get(
+            action=f"customer:create:{fake_customer['id']}",
+            livemode=False,
+        )
+        idempotency_key = str(idempotency_key.uuid)
+
         self.assertEqual(
             customer_mock.call_args_list[0][1].get("metadata"),
-            {"djstripe_subscriber": user.pk},
+            {
+                "djstripe_subscriber": user.pk,
+                "idempotency_key": idempotency_key,
+            },
         )
 
         self.assertEqual(customer.sources.count(), 0)
@@ -1462,21 +1478,46 @@ class TestCustomer(CreateAccountMixin, AssertStripeFksMixin, TestCase):
         with self.assertRaisesMessage(InvalidRequestError, "This should fail!"):
             self.customer.retry_unpaid_invoices()
 
-    @patch("stripe.Invoice.create", autospec=True)
+    @patch(
+        "stripe.Invoice.create", autospec=True, return_value=deepcopy(FAKE_INVOICE_III)
+    )
     def test_send_invoice_success(self, invoice_create_mock):
         return_status = self.customer.send_invoice()
         self.assertTrue(return_status)
+
+        # Get just created IdempotencyKey
+        idempotency_key = IdempotencyKey.objects.get(
+            action=f"invoice:create:{FAKE_INVOICE_III['id']}",
+            livemode=False,
+        )
+        idempotency_key = str(idempotency_key.uuid)
 
         invoice_create_mock.assert_called_once_with(
             api_key=djstripe_settings.STRIPE_SECRET_KEY,
             customer=self.customer.id,
             stripe_version=djstripe_settings.STRIPE_API_VERSION,
+            metadata={"idempotency_key": idempotency_key},
+            idempotency_key=idempotency_key,
         )
 
+    @patch.object(Invoice, "add_idempotency_key_to_metadata", autospec=True)
     @patch("stripe.Invoice.create", autospec=True)
-    def test_send_invoice_failure(self, invoice_create_mock):
+    def test_send_invoice_failure(
+        self, invoice_create_mock, add_idempotency_key_to_metadata_mock
+    ):
         invoice_create_mock.side_effect = InvalidRequestError(
             "Invoice creation failed.", "blah"
+        )
+
+        # Some random Idempotency Key
+        idempotency_key = "7779948d-98a2-4659-982d-833506267e2e"
+
+        add_idempotency_key_to_metadata_mock.return_value = (
+            {
+                "customer": self.customer.id,
+                "metadata": {"idempotency_key": idempotency_key},
+            },
+            idempotency_key,
         )
 
         return_status = self.customer.send_invoice()
@@ -1486,6 +1527,8 @@ class TestCustomer(CreateAccountMixin, AssertStripeFksMixin, TestCase):
             api_key=djstripe_settings.STRIPE_SECRET_KEY,
             customer=self.customer.id,
             stripe_version=djstripe_settings.STRIPE_API_VERSION,
+            metadata={"idempotency_key": idempotency_key},
+            idempotency_key=idempotency_key,
         )
 
     @patch("stripe.Coupon.retrieve", return_value=deepcopy(FAKE_COUPON), autospec=True)
@@ -1920,15 +1963,23 @@ class TestCustomer(CreateAccountMixin, AssertStripeFksMixin, TestCase):
         )
         self.assertEqual("pancakes", invoiceitem)
 
+        # Get just created IdempotencyKey
+        idempotency_key = IdempotencyKey.objects.get(
+            action=f"invoiceitem:create:{FAKE_INVOICEITEM['id']}",
+            livemode=False,
+        )
+        idempotency_key = str(idempotency_key.uuid)
+
         invoiceitem_create_mock.assert_called_once_with(
             api_key=djstripe_settings.STRIPE_SECRET_KEY,
+            idempotency_key=idempotency_key,
             amount=5000,
             customer=self.customer.id,
             currency="eur",
             description="test",
             discountable=None,
             invoice=77,
-            metadata=None,
+            metadata={"idempotency_key": idempotency_key},
             subscription=25,
             stripe_version=djstripe_settings.STRIPE_API_VERSION,
         )
@@ -1955,15 +2006,23 @@ class TestCustomer(CreateAccountMixin, AssertStripeFksMixin, TestCase):
         )
         self.assertEqual("pancakes", invoiceitem)
 
+        # Get just created IdempotencyKey
+        idempotency_key = IdempotencyKey.objects.get(
+            action=f"invoiceitem:create:{FAKE_INVOICEITEM['id']}",
+            livemode=False,
+        )
+        idempotency_key = str(idempotency_key.uuid)
+
         invoiceitem_create_mock.assert_called_once_with(
             api_key=djstripe_settings.STRIPE_SECRET_KEY,
             amount=5000,
+            idempotency_key=idempotency_key,
             customer=self.customer.id,
             currency="eur",
             description="test",
             discountable=None,
             invoice=77,
-            metadata=None,
+            metadata={"idempotency_key": idempotency_key},
             subscription=25,
             stripe_version=djstripe_settings.STRIPE_API_VERSION,
         )
