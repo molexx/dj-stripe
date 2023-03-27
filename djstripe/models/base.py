@@ -3,6 +3,7 @@ import uuid
 from datetime import timedelta
 from typing import Dict, List, Optional, Type
 
+from django.core.exceptions import FieldDoesNotExist
 from django.db import IntegrityError, models, transaction
 from django.utils import dateformat, timezone
 from stripe.api_resources.abstract.api_resource import APIResource
@@ -204,6 +205,31 @@ class StripeModel(StripeBaseModel):
         )
 
     @classmethod
+    def add_idempotency_key_to_metadata(cls, action, idempotency_key, **kwargs):
+        """
+        Adds idempotency_key to metadata dict in the kwargs dict and returns:
+        the updated kwargs, and the idempotency_key
+        """
+        # Prefer passed in idempotency_key.
+        if not idempotency_key:
+            # Create idempotency_key
+            idempotency_key = djstripe_settings.create_idempotency_key(
+                object_type=cls.__name__.lower(),
+                action=action,
+                livemode=djstripe_settings.STRIPE_LIVE_MODE,
+            )
+        # Add idempotency_key in object's metadata if that key exists
+        try:
+            if cls._meta.get_field("metadata"):
+                metadata = kwargs.get("metadata", {})
+                metadata["idempotency_key"] = idempotency_key
+                kwargs["metadata"] = metadata
+
+        except FieldDoesNotExist:
+            pass
+
+        return kwargs, idempotency_key
+
     @classmethod
     def _api_create(
         cls, idempotency_key=None, api_key=djstripe_settings.STRIPE_SECRET_KEY, **kwargs
